@@ -12,6 +12,7 @@ import (
 // automatically when it passes out of scope. It is safe to share a client amongst many
 // users, however Kafka will process requests from a single client strictly in serial,
 // so it is generally more efficient to use the default one client per producer/consumer.
+//客户端是通用的Kafka客户端。它管理与一个或多个Kafka经纪人的连接。 //您必须在客户端上调用Close（）以避免泄漏，当它超出范围时，将不会自动//对其进行垃圾收集。在许多用户中共享一个客户端是安全的//，但是Kafka将严格按顺序处理来自单个客户端的请求，因此，每个生产者/消费者使用默认的一个客户端通常更有效。
 type Client interface {
 	// Config returns the Config struct of the client. This struct should not be
 	// altered after it has been created.
