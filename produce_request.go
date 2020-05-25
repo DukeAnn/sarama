@@ -11,15 +11,20 @@ type RequiredAcks int16
 
 const (
 	// NoResponse doesn't send any response, the TCP ACK is all you get.
+	// NoResponse不发送任何响应，您所获得的只是TCP ACK。
 	NoResponse RequiredAcks = 0
 	// WaitForLocal waits for only the local commit to succeed before responding.
+	// aitForLocal 在响应之前仅等待本地提交成功。
 	WaitForLocal RequiredAcks = 1
 	// WaitForAll waits for all in-sync replicas to commit before responding.
 	// The minimum number of in-sync replicas is configured on the broker via
 	// the `min.insync.replicas` configuration key.
+	// WaitForAll 在响应之前等待所有同步副本提交。
+	// 通过 `min.insync.replicas` 配置密钥在代理上配置最小同步副本数。
 	WaitForAll RequiredAcks = -1
 )
 
+// 向 kafka 发送的数据
 type ProduceRequest struct {
 	TransactionalID *string
 	RequiredAcks    RequiredAcks
@@ -63,6 +68,7 @@ func updateBatchMetrics(recordBatch *RecordBatch, compressionRatioMetric metrics
 	return int64(len(recordBatch.Records))
 }
 
+// 对发送给 kafka 的请求进行编码
 func (r *ProduceRequest) encode(pe packetEncoder) error {
 	if r.Version >= 3 {
 		if err := pe.putNullableString(r.TransactionalID); err != nil {

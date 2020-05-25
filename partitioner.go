@@ -10,8 +10,12 @@ import (
 // Partitioner is anything that, given a Kafka message and a number of partitions indexed [0...numPartitions-1],
 // decides to which partition to send the message. RandomPartitioner, RoundRobinPartitioner and HashPartitioner are provided
 // as simple default implementations.
+// 分区程序是给定 Kafka 消息和索引为 [0 ... numPartitions-1] 的多个分区的任何东西，
+// 决定将消息发送到哪个分区。
+// 作为简单的默认实现提供了 RandomPartitioner，RoundRobinPartitioner 和 HashPartitioner。
 type Partitioner interface {
 	// Partition takes a message and partition count and chooses a partition
+	// 根据消息和给定的分区个数，返回一个选定的分区号
 	Partition(message *ProducerMessage, numPartitions int32) (int32, error)
 
 	// RequiresConsistency indicates to the user of the partitioner whether the
@@ -19,6 +23,10 @@ type Partitioner interface {
 	// partitioner requires consistency then it must be allowed to choose from all
 	// partitions (even ones known to be unavailable), and its choice must be
 	// respected by the caller. The obvious example is the HashPartitioner.
+	// RequiresConsistency 向分区程序的用户指示
+	// key-> partition 的映射是否一致。具体来说，如果分区程序需要一致性，
+	// 则必须允许从所有分区中进行选择（甚至已知不可用的分区），并且调用者必须遵守选择。
+	// 最明显的例子是 HashPartitioner。
 	RequiresConsistency() bool
 }
 
@@ -28,12 +36,19 @@ type Partitioner interface {
 // partitioners to require consistency sometimes, but not all times. It's useful
 // for, e.g., the HashPartitioner, which does not require consistency if the
 // message key is nil.
+// DynamicConsistencyPartitioner 可以有选择地由 Partitioners 实现
+// 以便提供比 Partitioner 接口中的 RequiresConsistency方法最初允许的更大的灵活性。
+// 这样，分区程序有时会（但并非始终）需要一致性。
+// 对于例如 HashPartitioner 很有用，
+// 如果消息 key 为 nil，则不需要一致性。
 type DynamicConsistencyPartitioner interface {
 	Partitioner
 
 	// MessageRequiresConsistency is similar to Partitioner.RequiresConsistency,
 	// but takes in the message being partitioned so that the partitioner can
 	// make a per-message determination.
+	// MessageRequiresConsistency 与 Partitioner.RequiresConsistency 相似，
+	// 但是接受要分区的消息，以便分区器可以按消息 key 发送到分区。
 	MessageRequiresConsistency(message *ProducerMessage) bool
 }
 

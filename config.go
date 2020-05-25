@@ -179,6 +179,7 @@ type Config struct {
 		Partitioner PartitionerConstructor
 		// If enabled, the producer will ensure that exactly one copy of each message is
 		// written.
+		// 如果启用，则生产者将确保每条消息的确切副本被写入 Kafka 。
 		Idempotent bool
 
 		// Return specifies what channels will be populated. If they are set to true,
@@ -200,6 +201,8 @@ type Config struct {
 		// sent to the broker. By default, messages are sent as fast as possible, and
 		// all messages received while the current batch is in-flight are placed
 		// into the subsequent batch.
+		// 以下配置选项控制消息批处理并发送到代理的频率。默认情况下，消息发送速度尽可能快，
+		// 如果当前批次进行正在处理，收到的所有消息都放入后续批次中处理。
 		Flush struct {
 			// The best-effort number of bytes needed to trigger a flush. Use the
 			// global sarama.MaxRequestSize to set a hard upper limit.
@@ -209,6 +212,7 @@ type Config struct {
 			Messages int
 			// The best-effort frequency of flushes. Equivalent to
 			// `queue.buffering.max.ms` setting of JVM producer.
+			// 缓冲区刷新的最大频率。等效于JVM 生产者的 queue.buffering.max.ms 设置。
 			Frequency time.Duration
 			// The maximum number of messages the producer will send in a single
 			// broker request. Defaults to 0 for unlimited. Similar to

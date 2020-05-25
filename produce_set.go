@@ -12,9 +12,10 @@ type partitionSet struct {
 	bufferBytes   int
 }
 
+// 一组将要发送给 kafka 的数据
 type produceSet struct {
 	parent        *asyncProducer
-	msgs          map[string]map[int32]*partitionSet
+	msgs          map[string]map[int32]*partitionSet // map[topic]map[分区编号]*partitionSet
 	producerID    int64
 	producerEpoch int16
 
@@ -227,6 +228,7 @@ func (ps *produceSet) dropPartition(topic string, partition int32) []*ProducerMe
 	return set.msgs
 }
 
+// 判断消息是否溢出
 func (ps *produceSet) wouldOverflow(msg *ProducerMessage) bool {
 	version := 1
 	if ps.parent.conf.Version.IsAtLeast(V0_11_0_0) {
@@ -249,18 +251,23 @@ func (ps *produceSet) wouldOverflow(msg *ProducerMessage) bool {
 	}
 }
 
+// 返回是否能刷新
 func (ps *produceSet) readyToFlush() bool {
 	switch {
 	// If we don't have any messages, nothing else matters
+	// 如果我们没有任何消息，那么其他都没有关系
 	case ps.empty():
 		return false
 	// If all three config values are 0, we always flush as-fast-as-possible
+	// 如果所有三个配置值均为0，我们将尽可能快地刷新
 	case ps.parent.conf.Producer.Flush.Frequency == 0 && ps.parent.conf.Producer.Flush.Bytes == 0 && ps.parent.conf.Producer.Flush.Messages == 0:
 		return true
 	// If we've passed the message trigger-point
+	// 如果我们已通过消息触发点
 	case ps.parent.conf.Producer.Flush.Messages > 0 && ps.bufferCount >= ps.parent.conf.Producer.Flush.Messages:
 		return true
 	// If we've passed the byte trigger-point
+	// 如果我们通过了字节触发点
 	case ps.parent.conf.Producer.Flush.Bytes > 0 && ps.bufferBytes >= ps.parent.conf.Producer.Flush.Bytes:
 		return true
 	default:

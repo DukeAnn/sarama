@@ -16,18 +16,28 @@ import (
 // producer will deadlock. You must call Close() or AsyncClose() on a producer to avoid
 // leaks: it will not be garbage-collected automatically when it passes out of
 // scope.
+// AsyncProducer 使用非阻塞 Kafka API 发送消息。
+// 这将消息路由到正确的 broker 所提供的 topic 分区，分析错误响应，适当的刷新元数据。
+// 你必须从 Errors() 通道读取错误，否则生产者将锁死。
+// 您必须在生产者上调用 Close() 或 AsyncClose() 以防止泄漏：当它超出范围时不会自动垃圾回收。
 type AsyncProducer interface {
 
 	// AsyncClose triggers a shutdown of the producer. The shutdown has completed
 	// when both the Errors and Successes channels have been closed. When calling
 	// AsyncClose, you *must* continue to read from those channels in order to
 	// drain the results of any messages in flight.
+	// AsyncClose 触发生产者的关闭。
+	// Errors 和 Successes 通道均已关闭时，关闭已完成。
+	// 调用 AsyncClose 时，您*必须*继续从这些通道中读取数据，以便耗尽正在运行的所有消息的结果。
 	AsyncClose()
 
 	// Close shuts down the producer and waits for any buffered messages to be
 	// flushed. You must call this function before a producer object passes out of
 	// scope, as it may otherwise leak memory. You must call this before calling
 	// Close on the underlying client.
+	// Close 关闭生产者，并等待所有的缓冲区消息刷新。
+	// 您必须在生产者对象超出范围之前调用此函数，否则可能会内存泄漏。
+	// 在基础 client 调用 Close 之前，必须先调用此函数。
 	Close() error
 
 	// Input is the input channel for the user to write messages to that they
@@ -48,6 +58,7 @@ type AsyncProducer interface {
 }
 
 // transactionManager keeps the state necessary to ensure idempotent production
+// transactionManager 保持必要的状态以确保幂等生产
 type transactionManager struct {
 	producerID      int64
 	producerEpoch   int16
@@ -60,6 +71,7 @@ const (
 	noProducerEpoch = -1
 )
 
+// 获取一个序列号，并将递增
 func (t *transactionManager) getAndIncrementSequenceNumber(topic string, partition int32) (int32, int16) {
 	key := fmt.Sprintf("%s-%d", topic, partition)
 	t.mutex.Lock()
@@ -91,6 +103,7 @@ func newTransactionManager(conf *Config, client Client) (*transactionManager, er
 	}
 
 	if conf.Producer.Idempotent {
+		// 确认每条都被写入 Kafka
 		initProducerIDResponse, err := client.InitProducerID()
 		if err != nil {
 			return nil, err
@@ -122,6 +135,7 @@ type asyncProducer struct {
 }
 
 // NewAsyncProducer creates a new AsyncProducer using the given broker addresses and configuration.
+// NewAsyncProducer 使用给定的代理地址和配置创建一个新的 AsyncProducer。
 func NewAsyncProducer(addrs []string, conf *Config) (AsyncProducer, error) {
 	client, err := NewClient(addrs, conf)
 	if err != nil {
@@ -132,6 +146,8 @@ func NewAsyncProducer(addrs []string, conf *Config) (AsyncProducer, error) {
 
 // NewAsyncProducerFromClient creates a new Producer using the given client. It is still
 // necessary to call Close() on the underlying client when shutting down this producer.
+// NewAsyncProducerFromClient 使用给定的客户端的创建生产者。
+// 关闭此生产者时，仍需要在底层 Client 上调用Close()。
 func NewAsyncProducerFromClient(client Client) (AsyncProducer, error) {
 	// For clients passed in by the client, ensure we don't
 	// call Close() on it.
@@ -145,6 +161,7 @@ func newAsyncProducer(client Client) (AsyncProducer, error) {
 		return nil, ErrClosedClient
 	}
 
+	// 幂等生产
 	txnmgr, err := newTransactionManager(client.Config(), client)
 	if err != nil {
 		return nil, err
@@ -163,6 +180,7 @@ func newAsyncProducer(client Client) (AsyncProducer, error) {
 	}
 
 	// launch our singleton dispatchers
+	// 启动我们的单例调度程序
 	go withRecover(p.dispatcher)
 	go withRecover(p.retryHandler)
 
@@ -319,10 +337,12 @@ func (p *asyncProducer) AsyncClose() {
 
 // singleton
 // dispatches messages by topic
+// 按 Topic 发送消息
 func (p *asyncProducer) dispatcher() {
 	handlers := make(map[string]chan<- *ProducerMessage)
 	shuttingDown := false
 
+	// 拿取消息
 	for msg := range p.input {
 		if msg == nil {
 			Logger.Println("Something tried to send a nil message, it was ignored.")
@@ -334,11 +354,13 @@ func (p *asyncProducer) dispatcher() {
 			p.inFlight.Done()
 			continue
 		} else if msg.retries == 0 {
+			// 重试为 0
 			if shuttingDown {
 				// we can't just call returnError here because that decrements the wait group,
 				// which hasn't been incremented yet for this message, and shouldn't be
 				pErr := &ProducerError{Msg: msg, Err: ErrShuttingDown}
 				if p.conf.Producer.Return.Errors {
+					// 收集错误
 					p.errors <- pErr
 				} else {
 					Logger.Println(pErr)
@@ -400,9 +422,12 @@ func (p *asyncProducer) newTopicProducer(topic string) chan<- *ProducerMessage {
 	return input
 }
 
+// 向 topic 生产数据
+// 数据来源 asyncProducer.dispatcher()
 func (tp *topicProducer) dispatch() {
 	for msg := range tp.input {
 		if msg.retries == 0 {
+			// 选分区
 			if err := tp.partitionMessage(msg); err != nil {
 				tp.parent.returnError(msg, err)
 				continue
@@ -411,23 +436,28 @@ func (tp *topicProducer) dispatch() {
 
 		handler := tp.handlers[msg.Partition]
 		if handler == nil {
+			// 创建一个分区的生产者
 			handler = tp.parent.newPartitionProducer(msg.Topic, msg.Partition)
 			tp.handlers[msg.Partition] = handler
 		}
 
+		// 将消息发送到分区处理器管道
 		handler <- msg
 	}
 
+	// topic 输入管道被关闭时，关闭全部分区的管道
 	for _, handler := range tp.handlers {
 		close(handler)
 	}
 }
 
+// 计算消息需要被发送到哪个分区
 func (tp *topicProducer) partitionMessage(msg *ProducerMessage) error {
 	var partitions []int32
 
 	err := tp.breaker.Run(func() (err error) {
 		requiresConsistency := false
+		// 是否根据 key 按分区发送
 		if ep, ok := tp.partitioner.(DynamicConsistencyPartitioner); ok {
 			requiresConsistency = ep.MessageRequiresConsistency(msg)
 		} else {
@@ -435,8 +465,10 @@ func (tp *topicProducer) partitionMessage(msg *ProducerMessage) error {
 		}
 
 		if requiresConsistency {
+			// 获取所有分区
 			partitions, err = tp.parent.client.Partitions(msg.Topic)
 		} else {
+			// 获取写入分区
 			partitions, err = tp.parent.client.WritablePartitions(msg.Topic)
 		}
 		return
@@ -452,6 +484,7 @@ func (tp *topicProducer) partitionMessage(msg *ProducerMessage) error {
 		return ErrLeaderNotAvailable
 	}
 
+	// 根据消息和给定的分区个数，选择一个分区
 	choice, err := tp.partitioner.Partition(msg, numPartitions)
 
 	if err != nil {
@@ -460,6 +493,7 @@ func (tp *topicProducer) partitionMessage(msg *ProducerMessage) error {
 		return ErrInvalidPartition
 	}
 
+	// 设置分区
 	msg.Partition = partitions[choice]
 
 	return nil
@@ -482,6 +516,10 @@ type partitionProducer struct {
 	// all other messages get buffered in retryState[msg.retries].buf to preserve ordering
 	// retryState[msg.retries].expectChaser simply tracks whether we've seen a fin message for a given level (and
 	// therefore whether our buffer is complete and safe to flush)
+	// highWatermark 跟踪“当前”重试级别，这是我们实际允许消息通过的唯一级别，
+	// 所有其​​他消息都缓存在 retryState[msg.retries].buf 中，以保留顺序
+	// retryState[msg.retries].expectChaser 只是跟踪我们是否已查看给定级别的 fin 消息
+	//（因此我们的缓冲区是否完整且可以安全刷新）
 	highWatermark int
 	retryState    []partitionRetryState
 }
@@ -491,6 +529,8 @@ type partitionRetryState struct {
 	expectChaser bool
 }
 
+// 新建一个分区的生产者，返回生产者消费的管道
+// 数据来源 topicProducer.dispatch()
 func (p *asyncProducer) newPartitionProducer(topic string, partition int32) chan<- *ProducerMessage {
 	input := make(chan *ProducerMessage, p.conf.ChannelBufferSize)
 	pp := &partitionProducer{
@@ -502,10 +542,12 @@ func (p *asyncProducer) newPartitionProducer(topic string, partition int32) chan
 		breaker:    breaker.New(3, 1, 10*time.Second),
 		retryState: make([]partitionRetryState, p.conf.Producer.Retry.Max+1),
 	}
+	// 当 partitionProducer.brokerProducer.abandoned 通道被关闭时，协程退出
 	go withRecover(pp.dispatch)
 	return input
 }
 
+// 休眠程序 backoff 时长
 func (pp *partitionProducer) backoff(retries int) {
 	var backoff time.Duration
 	if pp.parent.conf.Producer.Retry.BackoffFunc != nil {
@@ -519,12 +561,18 @@ func (pp *partitionProducer) backoff(retries int) {
 	}
 }
 
+// 把分配给分区的数据发给 broker 数据通道
+// 这个过程中或进行数据重试
+// 当关闭通道 partitionProducer.brokerProducer.abandoned 时方法退出
 func (pp *partitionProducer) dispatch() {
 	// try to prefetch the leader; if this doesn't work, we'll do a proper call to `updateLeader`
 	// on the first message
+	// 获取 leader ，可能从是缓存中的 leader，如果没有缓存重新获取并缓存
 	pp.leader, _ = pp.parent.client.Leader(pp.topic, pp.partition)
 	if pp.leader != nil {
+		// 传入 leader broker 获取一个 broker 生产者
 		pp.brokerProducer = pp.parent.getBrokerProducer(pp.leader)
+		// 我们正在生成一个同步消息；跟踪它，以便我们在飞行过程中也不会关闭
 		pp.parent.inFlight.Add(1) // we're generating a syn message; track it so we don't shut down while it's still inflight
 		pp.brokerProducer.input <- &ProducerMessage{Topic: pp.topic, Partition: pp.partition, flags: syn}
 	}
@@ -535,40 +583,51 @@ func (pp *partitionProducer) dispatch() {
 		}
 	}()
 
+	// 消费发给分区的管道数据到 broker 数据管道
 	for msg := range pp.input {
 		if pp.brokerProducer != nil && pp.brokerProducer.abandoned != nil {
 			select {
 			case <-pp.brokerProducer.abandoned:
 				// a message on the abandoned channel means that our current broker selection is out of date
+				// 如果 broker 生产者过时了，则取消这个分区的生产者
 				Logger.Printf("producer/leader/%s/%d abandoning broker %d\n", pp.topic, pp.partition, pp.leader.ID())
 				pp.parent.unrefBrokerProducer(pp.leader, pp.brokerProducer)
 				pp.brokerProducer = nil
 				time.Sleep(pp.parent.conf.Producer.Retry.Backoff)
 			default:
 				// producer connection is still open.
+				// 默认生产者连接仍处于打开状态
 			}
 		}
 
 		if msg.retries > pp.highWatermark {
 			// a new, higher, retry level; handle it and then back off
+			// 新建高重试级别；处理然后休眠
 			pp.newHighWatermark(msg.retries)
 			pp.backoff(msg.retries)
 		} else if pp.highWatermark > 0 {
 			// we are retrying something (else highWatermark would be 0) but this message is not a *new* retry level
+			// 我们正在重试某些内容（除非 highWatermark 将为 0），但此消息不是 *new* 重试级别
 			if msg.retries < pp.highWatermark {
 				// in fact this message is not even the current retry level, so buffer it for now (unless it's a just a fin)
+				// 实际上，该消息甚至还不是当前的重试级别，因此请暂时对其进行缓冲（除非只是一个限制）
 				if msg.flags&fin == fin {
 					pp.retryState[msg.retries].expectChaser = false
+					// fin 现在已处理并将被垃圾回收
 					pp.parent.inFlight.Done() // this fin is now handled and will be garbage collected
 				} else {
+					// 将数据放回重试 buf
 					pp.retryState[msg.retries].buf = append(pp.retryState[msg.retries].buf, msg)
 				}
 				continue
 			} else if msg.flags&fin == fin {
 				// this message is of the current retry level (msg.retries == highWatermark) and the fin flag is set,
 				// meaning this retry level is done and we can go down (at least) one level and flush that
+				// 此消息是当前重试级别（msg.retries == highWatermark），并且设置了fin 标志，
+				// 表示此重试级别已完成，我们可以降低（至少）一个级别并刷新该级别
 				pp.retryState[pp.highWatermark].expectChaser = false
 				pp.flushRetryBuffers()
+				// fin 现在已处理并将被垃圾回收
 				pp.parent.inFlight.Done() // this fin is now handled and will be garbage collected
 				continue
 			}
@@ -576,9 +635,15 @@ func (pp *partitionProducer) dispatch() {
 
 		// if we made it this far then the current msg contains real data, and can be sent to the next goroutine
 		// without breaking any of our ordering guarantees
+		// 如果程序到此为止，则当前的消息包含真实数据，并且可以发送到下一个goroutine
+		// 而不会破坏我们的任何排序保证
 
+		// 如果 brokerProducer 不存在，则更新元数据创建 brokerProducer 属性
+		// 如果创建失败，休眠若干分钟后重试
 		if pp.brokerProducer == nil {
+			// 生产者为空 刷新 leader
 			if err := pp.updateLeader(); err != nil {
+				// 返回错误，休眠后重新生产
 				pp.parent.returnError(msg, err)
 				pp.backoff(msg.retries)
 				continue
@@ -590,11 +655,15 @@ func (pp *partitionProducer) dispatch() {
 		// number for it.
 		// All messages being retried (sent or not) have already had their retry count updated
 		// Also, ignore "special" syn/fin messages used to sync the brokerProducer and the topicProducer.
+		// 现在我们知道我们有一个 broker 可以实际尝试将此消息发送给它，并为其生成序列号。
+		// 所有要重试（发送或不发送）的消息的重试计数都已更新
+		// 另外，请忽略用于同步 brokerProducer 和 topicProducer 的“特殊” syn/fin 消息。
 		if pp.parent.conf.Producer.Idempotent && msg.retries == 0 && msg.flags == 0 {
 			msg.sequenceNumber, msg.producerEpoch = pp.parent.txnmgr.getAndIncrementSequenceNumber(msg.Topic, msg.Partition)
 			msg.hasSequence = true
 		}
 
+		// 发送给 broker 生产者
 		pp.brokerProducer.input <- msg
 	}
 }
@@ -644,6 +713,8 @@ func (pp *partitionProducer) flushRetryBuffers() {
 	}
 }
 
+// 刷新 kafka 的元数据
+// 获取当前 topic 分区的 leader broker 赋值给 partitionProducer.brokerProducer 属性
 func (pp *partitionProducer) updateLeader() error {
 	return pp.breaker.Run(func() (err error) {
 		if err = pp.parent.client.RefreshMetadata(pp.topic); err != nil {
@@ -655,6 +726,7 @@ func (pp *partitionProducer) updateLeader() error {
 		}
 
 		pp.brokerProducer = pp.parent.getBrokerProducer(pp.leader)
+		// 我们正在生成一个 syn 消息；跟踪它，以便我们在 inflight 过程中也不会关闭
 		pp.parent.inFlight.Add(1) // we're generating a syn message; track it so we don't shut down while it's still inflight
 		pp.brokerProducer.input <- &ProducerMessage{Topic: pp.topic, Partition: pp.partition, flags: syn}
 
@@ -663,9 +735,12 @@ func (pp *partitionProducer) updateLeader() error {
 }
 
 // one per broker; also constructs an associated flusher
+// 创建一个 broker 的生产者
+// 数据来自 partitionProducer.dispatch() 方法
 func (p *asyncProducer) newBrokerProducer(broker *Broker) *brokerProducer {
 	var (
-		input     = make(chan *ProducerMessage)
+		input = make(chan *ProducerMessage)
+		// 同步通道 bridge
 		bridge    = make(chan *produceSet)
 		responses = make(chan *brokerProducerResponse)
 	)
@@ -684,11 +759,16 @@ func (p *asyncProducer) newBrokerProducer(broker *Broker) *brokerProducer {
 
 	// minimal bridge to make the network response `select`able
 	go withRecover(func() {
+		// 向将消息发送给 Kafka
+		// bridge 来源于 buffer
+		// brokerProducer.run() 会在满足 buffer 缓冲刷新时将 buffer 发送给 output 通道
 		for set := range bridge {
+			// 发送前处理要生产的数据
 			request := set.buildRequest()
-
+			// 生产数据，发送的是一个数据包，不是一条数据
 			response, err := broker.Produce(request)
 
+			// 将消息发送给 responses 通道，由 brokerProducer.run() 处理
 			responses <- &brokerProducerResponse{
 				set: set,
 				err: err,
@@ -713,6 +793,7 @@ type brokerProducerResponse struct {
 
 // groups messages together into appropriately-sized batches for sending to the broker
 // handles state related to retries etc
+// 将消息分组为适当大小的批处理，以发送给 broker 处理重试等相关的状态
 type brokerProducer struct {
 	parent *asyncProducer
 	broker *Broker
@@ -731,6 +812,8 @@ type brokerProducer struct {
 	currentRetries map[string]map[int32]error
 }
 
+// 开始运转，通过网络发送要给 kafka 数据。
+// 并且处理 kafka 的响应结果将结果发送给 brokerProducer.handleResponse
 func (bp *brokerProducer) run() {
 	var output chan<- *produceSet
 	Logger.Printf("producer/broker/%d starting up\n", bp.broker.ID())
@@ -738,6 +821,7 @@ func (bp *brokerProducer) run() {
 	for {
 		select {
 		case msg, ok := <-bp.input:
+			// 消费分区管道发送过来的数据，发送到 brokerProducer.buffer，
 			if !ok {
 				Logger.Printf("producer/broker/%d input chan closed\n", bp.broker.ID())
 				bp.shutdown()
@@ -759,7 +843,9 @@ func (bp *brokerProducer) run() {
 				continue
 			}
 
+			// 消息是否需要重试
 			if reason := bp.needsRetry(msg); reason != nil {
+				// 放回重试队列
 				bp.parent.retryMessage(msg, reason)
 
 				if bp.closing == nil && msg.flags&fin == fin {
@@ -773,8 +859,10 @@ func (bp *brokerProducer) run() {
 			}
 
 			if bp.buffer.wouldOverflow(msg) {
+				// 消息溢出
 				Logger.Printf("producer/broker/%d maximum request accumulated, waiting for space\n", bp.broker.ID())
 				if err := bp.waitForSpace(msg, false); err != nil {
+					// 等待空间，放回重试队列
 					bp.parent.retryMessage(msg, err)
 					continue
 				}
@@ -782,35 +870,48 @@ func (bp *brokerProducer) run() {
 
 			if bp.parent.txnmgr.producerID != noProducerID && bp.buffer.producerEpoch != msg.producerEpoch {
 				// The epoch was reset, need to roll the buffer over
+				// 纪元被重置，需要将缓冲区翻转
 				Logger.Printf("producer/broker/%d detected epoch rollover, waiting for new buffer\n", bp.broker.ID())
 				if err := bp.waitForSpace(msg, true); err != nil {
 					bp.parent.retryMessage(msg, err)
 					continue
 				}
 			}
+
+			// 将消息加入缓冲区 produceSet，等待
 			if err := bp.buffer.add(msg); err != nil {
 				bp.parent.returnError(msg, err)
 				continue
 			}
 
 			if bp.parent.conf.Producer.Flush.Frequency > 0 && bp.timer == nil {
+				// 设置刷新缓冲区时间
 				bp.timer = time.After(bp.parent.conf.Producer.Flush.Frequency)
 			}
 		case <-bp.timer:
+			// 到达刷新时间，标记触发为 true
 			bp.timerFired = true
 		case output <- bp.buffer:
+			// 当达到刷新条件时
+			// 将缓冲区发送给输出
+			// 主程序会把 output 中的数据消费出来发送给 kafka
+			// 重置缓冲区
 			bp.rollOver()
 		case response, ok := <-bp.responses:
 			if ok {
+				// 处理响应结果，将 success 和 error 消息进行分流
 				bp.handleResponse(response)
 			}
 		case <-bp.stopchan:
+			// 生产被停止，结束函数
 			Logger.Printf(
 				"producer/broker/%d run loop asked to stop\n", bp.broker.ID())
 			return
 		}
 
+		// select 后判断是否刷新缓冲区，将 buffer 数据发送给 output，由主程序消费 output 发送给 kafka
 		if bp.timerFired || bp.buffer.readyToFlush() {
+			// 如果达到了刷新的条件，给局部变量 output 赋值为 brokerProducer.output，以将 brokerProducer.buffer 发送给 output
 			output = bp.output
 		} else {
 			output = nil
@@ -861,12 +962,15 @@ func (bp *brokerProducer) waitForSpace(msg *ProducerMessage, forceRollover bool)
 	}
 }
 
+// 重置缓冲区
 func (bp *brokerProducer) rollOver() {
 	bp.timer = nil
 	bp.timerFired = false
 	bp.buffer = newProduceSet(bp.parent)
 }
 
+// 处理响应结果
+// 将 success 和 error 消息进行分流
 func (bp *brokerProducer) handleResponse(response *brokerProducerResponse) {
 	if response.err != nil {
 		bp.handleError(response.set, response.err)
@@ -996,20 +1100,28 @@ func (p *asyncProducer) retryBatch(topic string, partition int32, pSet *partitio
 func (bp *brokerProducer) handleError(sent *produceSet, err error) {
 	switch err.(type) {
 	case PacketEncodingError:
+		// kafka 编码方式错误
 		sent.eachPartition(func(topic string, partition int32, pSet *partitionSet) {
+			// 将错误发给 异步生产者错误管道
 			bp.parent.returnErrors(pSet.msgs, err)
 		})
 	default:
 		Logger.Printf("producer/broker/%d state change to [closing] because %s\n", bp.broker.ID(), err)
+		// 断开 broker 连接
 		bp.parent.abandonBrokerConnection(bp.broker)
+		// 关闭 broker
+		// 当 conn == nil 返回 ErrNotConnected，但并未接收 err
 		_ = bp.broker.Close()
 		bp.closing = err
 		sent.eachPartition(func(topic string, partition int32, pSet *partitionSet) {
+			// 重试所有分区消息
 			bp.parent.retryMessages(pSet.msgs, err)
 		})
 		bp.buffer.eachPartition(func(topic string, partition int32, pSet *partitionSet) {
+			// 重试所有生产者缓冲区的消息
 			bp.parent.retryMessages(pSet.msgs, err)
 		})
+		// 重置 bp
 		bp.rollOver()
 	}
 }
@@ -1017,6 +1129,7 @@ func (bp *brokerProducer) handleError(sent *produceSet, err error) {
 // singleton
 // effectively a "bridge" between the flushers and the dispatcher in order to avoid deadlock
 // based on https://godoc.org/github.com/eapache/channels#InfiniteChannel
+// 重试
 func (p *asyncProducer) retryHandler() {
 	var msg *ProducerMessage
 	buf := queue.New()
@@ -1094,6 +1207,7 @@ func (p *asyncProducer) returnSuccesses(batch []*ProducerMessage) {
 	}
 }
 
+// 将消息放回重试队列
 func (p *asyncProducer) retryMessage(msg *ProducerMessage, err error) {
 	if msg.retries >= p.conf.Producer.Retry.Max {
 		p.returnError(msg, err)
@@ -1109,6 +1223,7 @@ func (p *asyncProducer) retryMessages(batch []*ProducerMessage, err error) {
 	}
 }
 
+// 获取一个 broker 生产者并增加引用
 func (p *asyncProducer) getBrokerProducer(broker *Broker) *brokerProducer {
 	p.brokerLock.Lock()
 	defer p.brokerLock.Unlock()
@@ -1126,6 +1241,7 @@ func (p *asyncProducer) getBrokerProducer(broker *Broker) *brokerProducer {
 	return bp
 }
 
+// 取消 Broker 生产者的引用
 func (p *asyncProducer) unrefBrokerProducer(broker *Broker, bp *brokerProducer) {
 	p.brokerLock.Lock()
 	defer p.brokerLock.Unlock()
@@ -1141,6 +1257,7 @@ func (p *asyncProducer) unrefBrokerProducer(broker *Broker, bp *brokerProducer) 
 	}
 }
 
+// 取消掉一个 broker 生产者
 func (p *asyncProducer) abandonBrokerConnection(broker *Broker) {
 	p.brokerLock.Lock()
 	defer p.brokerLock.Unlock()

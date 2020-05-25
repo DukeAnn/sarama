@@ -135,6 +135,11 @@ func NewBroker(addr string) *Broker {
 // block waiting for the connection to succeed or fail. To get the effect of a fully synchronous Open call,
 // follow it by a call to Connected(). The only errors Open will return directly are ConfigurationError or
 // AlreadyConnected. If conf is nil, the result of NewConfig() is used.
+// Open 尝试连接到 Broker（如果尚未连接），但不会等待连接完成。
+// 这意味着对 Broker 的任何后续操作都将等待连接成功或失败。因为上了锁
+// 要获得完全同步的 Open 调用的效果，在其后调用 Connected() 等待连接完成
+// Open 将直接返回的唯一错误是 ConfigurationError 或
+// AlreadyConnected。如果 conf 为 nil，则使用 NewConfig() 的结果。
 func (b *Broker) Open(conf *Config) error {
 	if !atomic.CompareAndSwapInt32(&b.opened, 0, 1) {
 		return ErrAlreadyConnected
@@ -152,6 +157,7 @@ func (b *Broker) Open(conf *Config) error {
 	b.lock.Lock()
 
 	go withRecover(func() {
+		// 连接完成释放锁
 		defer b.lock.Unlock()
 
 		dialer := conf.getDialer()
@@ -216,6 +222,8 @@ func (b *Broker) Open(conf *Config) error {
 
 // Connected returns true if the broker is connected and false otherwise. If the broker is not
 // connected but it had tried to connect, the error from that connection attempt is also returned.
+// 如果代理已连接，则 Connected 返回 true，否则返回 false。
+// 如果代理未连接，但它已尝试连接，则也会返回该连接尝试中的错误。
 func (b *Broker) Connected() (bool, error) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
@@ -329,6 +337,7 @@ func (b *Broker) GetAvailableOffsets(request *OffsetRequest) (*OffsetResponse, e
 }
 
 //Produce returns a produce response or error
+// 当 Broker.conn == nil 返回 ErrNotConnected
 func (b *Broker) Produce(request *ProduceRequest) (*ProduceResponse, error) {
 	var (
 		response *ProduceResponse
@@ -336,9 +345,14 @@ func (b *Broker) Produce(request *ProduceRequest) (*ProduceResponse, error) {
 	)
 
 	if request.RequiredAcks == NoResponse {
+		// 直接发送不等待响应
+		// response 会一直为 nil
+		// err 会一直为 nil
 		err = b.sendAndReceive(request, nil)
 	} else {
 		response = new(ProduceResponse)
+		// 发送数据等待响应
+		// 当 conn == nil 返回 ErrNotConnected
 		err = b.sendAndReceive(request, response)
 	}
 
@@ -704,6 +718,7 @@ func (b *Broker) readFull(buf []byte) (n int, err error) {
 
 // write  ensures the conn WriteDeadline has been setup before making a
 // call to conn.Write
+// 将数据写入网络连接，并设置写超时
 func (b *Broker) write(buf []byte) (n int, err error) {
 	if err := b.conn.SetWriteDeadline(time.Now().Add(b.conf.Net.WriteTimeout)); err != nil {
 		return 0, err
@@ -712,6 +727,9 @@ func (b *Broker) write(buf []byte) (n int, err error) {
 	return b.conn.Write(buf)
 }
 
+// 发送数据到 Kafka
+// promiseResponse 为 false 不等待响应直接返回 nil, nil
+// 当 conn == nil 返回 ErrNotConnected
 func (b *Broker) send(rb protocolBody, promiseResponse bool, responseHeaderVersion int16) (*responsePromise, error) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
@@ -720,6 +738,7 @@ func (b *Broker) send(rb protocolBody, promiseResponse bool, responseHeaderVersi
 		if b.connErr != nil {
 			return nil, b.connErr
 		}
+		// 无网络连接返回失败
 		return nil, ErrNotConnected
 	}
 
@@ -746,6 +765,7 @@ func (b *Broker) send(rb protocolBody, promiseResponse bool, responseHeaderVersi
 
 	if !promiseResponse {
 		// Record request latency without the response
+		// 记录请求延迟而没有响应
 		b.updateRequestLatencyAndInFlightMetrics(time.Since(requestTime))
 		return nil, nil
 	}
@@ -756,12 +776,13 @@ func (b *Broker) send(rb protocolBody, promiseResponse bool, responseHeaderVersi
 	return &promise, nil
 }
 
+// res 为 nil 传给 send()  一个 false
 func (b *Broker) sendAndReceive(req protocolBody, res protocolBody) error {
 	responseHeaderVersion := int16(-1)
 	if res != nil {
 		responseHeaderVersion = res.headerVersion()
 	}
-
+	// 发起网络请求
 	promise, err := b.send(req, res != nil, responseHeaderVersion)
 	if err != nil {
 		return err
@@ -840,6 +861,7 @@ func (b *Broker) encode(pe packetEncoder, version int16) (err error) {
 	return nil
 }
 
+// 异步从自身属性中接收、处理响应
 func (b *Broker) responseReceiver() {
 	var dead error
 

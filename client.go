@@ -12,73 +12,102 @@ import (
 // automatically when it passes out of scope. It is safe to share a client amongst many
 // users, however Kafka will process requests from a single client strictly in serial,
 // so it is generally more efficient to use the default one client per producer/consumer.
-//客户端是通用的Kafka客户端。它管理与一个或多个Kafka经纪人的连接。 //您必须在客户端上调用Close（）以避免泄漏，当它超出范围时，将不会自动//对其进行垃圾收集。在许多用户中共享一个客户端是安全的//，但是Kafka将严格按顺序处理来自单个客户端的请求，因此，每个生产者/消费者使用默认的一个客户端通常更有效。
+// 客户端是通用的Kafka客户端。它管理与一个或多个Kafka broker 的连接。
+// 您必须在客户端上调用 Close() 以避免泄漏，当它超出范围时，将不会自动对其进行垃圾收集。
+// 在许多用户中共享一个客户端是并发安全的，但是 Kafka 将严格按顺序处理来自单个客户端的请求，
+// 因此，每个生产者/消费者使用默认的一个客户端通常更有效。
 type Client interface {
 	// Config returns the Config struct of the client. This struct should not be
 	// altered after it has been created.
+	// Config 返回客户端的配置结构。 它已被创建之后这个结构不应该被改变。
 	Config() *Config
 
 	// Controller returns the cluster controller broker. It will return a
 	// locally cached value if it's available. You can call RefreshController
 	// to update the cached value. Requires Kafka 0.10 or higher.
+	// Controller 返回群集控制器代理。 如果它存在，它会返回一个本地缓存值。
+	// 可以调用 RefreshController 以更新缓存值。 需要卡夫卡 0.10 或更高版本
 	Controller() (*Broker, error)
 
 	// RefreshController retrieves the cluster controller from fresh metadata
 	// and stores it in the local cache. Requires Kafka 0.10 or higher.
+	// RefreshController 从新的元数据中检索群集控制器
+	// 并将其存储在本地缓存中。需要Kafka 0.10 或更高。
 	RefreshController() (*Broker, error)
 
 	// Brokers returns the current set of active brokers as retrieved from cluster metadata.
+	// 返回从集群元数据中检索到的当前活跃 broker 集合。
 	Brokers() []*Broker
 
 	// Topics returns the set of available topics as retrieved from cluster metadata.
+	// Topics 返回从集群检索元数据的一组可用的 topic
 	Topics() ([]string, error)
 
 	// Partitions returns the sorted list of all partition IDs for the given topic.
+	// Partitions 返回给定主题的所有分区ID 的排序列表
 	Partitions(topic string) ([]int32, error)
 
 	// WritablePartitions returns the sorted list of all writable partition IDs for
 	// the given topic, where "writable" means "having a valid leader accepting
 	// writes".
+	// WritablePartitions 返回给定主题的所有可写分区 ID 的排序列表，
+	// 其中“writable” 表示 “具有有效的 Leader 的接受写入”。
 	WritablePartitions(topic string) ([]int32, error)
 
 	// Leader returns the broker object that is the leader of the current
 	// topic/partition, as determined by querying the cluster metadata.
+	// Leader 返回 broker 对象，该对象是当前主题/分区的 Leader，具体取决于查询集群元数据
 	Leader(topic string, partitionID int32) (*Broker, error)
 
 	// Replicas returns the set of all replica IDs for the given partition.
+	// Replicas 返回集合为给定的分区中的所有副本标识的
 	Replicas(topic string, partitionID int32) ([]int32, error)
 
 	// InSyncReplicas returns the set of all in-sync replica IDs for the given
 	// partition. In-sync replicas are replicas which are fully caught up with
 	// the partition leader.
+	// InSyncReplicas 返回集合为给定的分区中所有的同步复制的ID 。
+	// 在同步副本是其与分区 Leader 完全一致。
 	InSyncReplicas(topic string, partitionID int32) ([]int32, error)
 
 	// OfflineReplicas returns the set of all offline replica IDs for the given
 	// partition. Offline replicas are replicas which are offline
+	// OfflineReplicas 返回给定分区的所有脱机副本ID的集合。脱机副本是脱机的副本
 	OfflineReplicas(topic string, partitionID int32) ([]int32, error)
 
 	// RefreshMetadata takes a list of topics and queries the cluster to refresh the
 	// available metadata for those topics. If no topics are provided, it will refresh
 	// metadata for all topics.
+	// RefreshMetadata 需要的主题列表和查询集群刷新这些主题可用的元数据。
+	// 如果没有提供主题，它会刷新元数据的所有主题。
 	RefreshMetadata(topics ...string) error
 
 	// GetOffset queries the cluster to get the most recent available offset at the
 	// given time (in milliseconds) on the topic/partition combination.
 	// Time should be OffsetOldest for the earliest available offset,
 	// OffsetNewest for the offset of the message that will be produced next, or a time.
+	// getOffset 查询集群，以获得最新的可在给定的时间（毫秒）偏移的 topic/partition 组合。
+	// 时间应该是 OffsetOldest 的最早可用偏移，OffsetNewest 对于接下来将要生产的消息偏移或者是一个时间
 	GetOffset(topic string, partitionID int32, time int64) (int64, error)
 
 	// Coordinator returns the coordinating broker for a consumer group. It will
 	// return a locally cached value if it's available. You can call
 	// RefreshCoordinator to update the cached value. This function only works on
 	// Kafka 0.8.2 and higher.
+	// 协调员返回一个消费群协调 broker。
+	// 如果它存在可用它会返回一个本地缓存值。
+	// 可以调用 RefreshCoordinator 以更新缓存值。
+	// 此功能仅适用于卡夫卡0.8.2或更高。
 	Coordinator(consumerGroup string) (*Broker, error)
 
 	// RefreshCoordinator retrieves the coordinator for a consumer group and stores it
 	// in local cache. This function only works on Kafka 0.8.2 and higher.
+	// RefreshCoordinator 检索消费者组的协调器，并将其存储在本地缓存中。
+	// 此功能仅适用于Kafka 0.8.2及更高版本。
 	RefreshCoordinator(consumerGroup string) error
 
 	// InitProducerID retrieves information required for Idempotent Producer
+	// InitProducerID 检索幂等生产者所需的信息
 	InitProducerID() (*InitProducerIDResponse, error)
 
 	// Close shuts down all broker connections managed by this client. It is required
@@ -111,6 +140,9 @@ type client struct {
 	// the broker addresses given to us through the constructor are not guaranteed to be returned in
 	// the cluster metadata (I *think* it only returns brokers who are currently leading partitions?)
 	// so we store them separately
+	// 不能保证通过构造函数提供给我们的代理地址会在群集元数据中返回
+	//（我*认为*它只返回当前处于领先分区的代理？）
+	// 因此我们将它们分开存储
 	seedBrokers []*Broker
 	deadSeeds   []*Broker
 
@@ -502,6 +534,8 @@ func (client *client) deregisterController() {
 
 // RefreshController retrieves the cluster controller from fresh metadata
 // and stores it in the local cache. Requires Kafka 0.10 or higher.
+// RefreshController 从新的元数据中检索群集控制器
+// 并将其存储在本地缓存中。需要 Kafka 0.10 或更高。
 func (client *client) RefreshController() (*Broker, error) {
 	if client.Closed() {
 		return nil, ErrClosedClient
@@ -608,6 +642,7 @@ func (client *client) registerBroker(broker *Broker) {
 
 // deregisterBroker removes a broker from the seedsBroker list, and if it's
 // not the seedbroker, removes it from brokers map completely.
+// 从 seedsBroker 删除一个 broker
 func (client *client) deregisterBroker(broker *Broker) {
 	client.lock.Lock()
 	defer client.lock.Unlock()
@@ -634,6 +669,7 @@ func (client *client) resurrectDeadBrokers() {
 	client.deadSeeds = nil
 }
 
+// 返回一个可用的 broker，或 nil
 func (client *client) any() *Broker {
 	client.lock.RLock()
 	defer client.lock.RUnlock()
@@ -644,6 +680,7 @@ func (client *client) any() *Broker {
 	}
 
 	// not guaranteed to be random *or* deterministic
+	// 不保证是随机的*或*确定性的
 	for _, broker := range client.brokers {
 		_ = broker.Open(client.conf)
 		return broker
@@ -899,6 +936,7 @@ func (client *client) tryRefreshMetadata(topics []string, attemptsRemaining int,
 }
 
 // if no fatal error, returns a list of topics that need retrying due to ErrLeaderNotAvailable
+// 如果没有致命错误，则返回由于 ErrLeaderNotAvailable 而需要重试的 topic 列表
 func (client *client) updateMetadata(data *MetadataResponse, allKnownMetaData bool) (retry bool, err error) {
 	if client.Closed() {
 		return
