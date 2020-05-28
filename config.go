@@ -155,6 +155,8 @@ type Config struct {
 	Producer struct {
 		// The maximum permitted size of a message (defaults to 1000000). Should be
 		// set equal to or smaller than the broker's `message.max.bytes`.
+		// 消息的最大允许大小（默认为1000000）。
+		// 应该设置为等于或小于代理的`message.max.bytes`。
 		MaxMessageBytes int
 		// The level of acknowledgement reliability needed from the broker (defaults
 		// to WaitForLocal). Equivalent to the `request.required.acks` setting of the

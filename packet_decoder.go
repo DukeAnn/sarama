@@ -3,6 +3,9 @@ package sarama
 // PacketDecoder is the interface providing helpers for reading with Kafka's encoding rules.
 // Types implementing Decoder only need to worry about calling methods like GetString,
 // not about how a string is represented in Kafka.
+// PacketDecoder是为阅读Kafka编码规则提供帮助的接口。
+// 实现Decoder的类型只需要担心诸如GetString之类的调用方法，
+// 而不必担心在Kafka中如何表示字符串。
 type packetDecoder interface {
 	// Primitives
 	getInt8() (int8, error)
