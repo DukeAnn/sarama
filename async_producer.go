@@ -1025,8 +1025,10 @@ func (bp *brokerProducer) handleSuccess(sent *produceSet, response *ProduceRespo
 				retryTopics = append(retryTopics, topic)
 			}
 		// Other non-retriable errors
+		// 其他不可恢复的错误
 		default:
 			if bp.parent.conf.Producer.Retry.Max <= 0 {
+				// 取消 broker 连接
 				bp.parent.abandonBrokerConnection(bp.broker)
 			}
 			bp.parent.returnErrors(pSet.msgs, block.Err)
